@@ -13,8 +13,10 @@ import (
 type WatchConfig struct {
 	Interval     time.Duration
 	Timeout      time.Duration
-	DeploymentID string // If empty, watches latest deployment
+	DeploymentID string    // If empty, watches latest deployment
+	Since        time.Time // If set, skip deployments created before this time
 	JSONOutput   bool
+	StreamLogs   bool
 	Writer       io.Writer // Status updates go here (typically stderr)
 }
 
@@ -57,6 +59,18 @@ func Watch(ctx context.Context, provider Provider, cfg WatchConfig) (*WatchResul
 		return provider.LatestDeployment(ctx)
 	}
 
+	// Log streaming goroutine management
+	var logCancel context.CancelFunc
+	var logStartedFor string
+
+	defer func() {
+		if logCancel != nil {
+			logCancel()
+		}
+	}()
+
+	spinIdx := 0
+
 	for {
 		d, err := fetch()
 		if err != nil {
@@ -68,13 +82,48 @@ func Watch(ctx context.Context, provider Provider, cfg WatchConfig) (*WatchResul
 			goto wait
 		}
 
+		// Skip deployments created before the --since threshold
+		if !cfg.Since.IsZero() && !d.CreatedAt.IsZero() && d.CreatedAt.Before(cfg.Since) {
+			goto wait
+		}
+
+		// Start log streaming once we have a deployment ID
+		if cfg.StreamLogs && d.ID != "" && logStartedFor != d.ID {
+			if ls, ok := provider.(LogStreamer); ok {
+				if logCancel != nil {
+					logCancel()
+				}
+				logCtx, lc := context.WithCancel(ctx)
+				logCancel = lc
+				logStartedFor = d.ID
+				go ls.StreamLogs(logCtx, d.ID, cfg.Writer)
+			}
+		}
+
 		if d.Status != lastStatus {
 			elapsed := time.Since(start).Truncate(time.Second)
+			// Clear spinner line before printing status change
+			if !cfg.JSONOutput {
+				fmt.Fprintf(cfg.Writer, "\r\033[K")
+			}
 			writeStatus(cfg.Writer, cfg.JSONOutput, d.Status.String(), provider.Name(), d.ID, statusMessage(d, elapsed))
 			lastStatus = d.Status
+		} else if !cfg.JSONOutput {
+			// Show spinner with elapsed time between status changes
+			elapsed := time.Since(start).Truncate(time.Second)
+			spinner := spinnerChars[spinIdx%len(spinnerChars)]
+			spinIdx++
+			fmt.Fprintf(cfg.Writer, "\r\033[K%s %s %s",
+				spinner,
+				lastStatus,
+				elapsed,
+			)
 		}
 
 		if d.Status.Terminal() {
+			if logCancel != nil {
+				logCancel()
+			}
 			return &WatchResult{
 				Deployment: d,
 				Duration:   time.Since(start),
@@ -157,6 +206,8 @@ func statusSymbol(status string) string {
 		return "[?]"
 	}
 }
+
+var spinnerChars = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func truncate(s string, n int) string {
 	if len(s) <= n {

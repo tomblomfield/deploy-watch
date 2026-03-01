@@ -273,6 +273,96 @@ func TestWatchCancelled(t *testing.T) {
 	}
 }
 
+func TestWatchSinceSkipsOldDeploys(t *testing.T) {
+	oldTime := time.Now().Add(-10 * time.Minute)
+	newTime := time.Now().Add(-5 * time.Second)
+
+	callCount := 0
+	mock := &mockProvider{
+		name: "test",
+		deployments: []*Deployment{
+			// First call returns an old deploy (should be skipped)
+			{ID: "old-1", Status: StatusSucceeded, Provider: "test", CreatedAt: oldTime},
+			// Second call returns a new deploy (should be accepted)
+			{ID: "new-1", Status: StatusSucceeded, Provider: "test", CreatedAt: newTime},
+		},
+	}
+	_ = callCount
+
+	result, err := Watch(context.Background(), mock, WatchConfig{
+		Interval: 1 * time.Millisecond,
+		Timeout:  5 * time.Second,
+		Since:    time.Now().Add(-30 * time.Second), // Only deploys from last 30s
+		Writer:   &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Watch() error: %v", err)
+	}
+
+	if result.Deployment.ID != "new-1" {
+		t.Errorf("deployment ID = %s, want new-1 (old deploy should have been skipped)", result.Deployment.ID)
+	}
+}
+
+func TestWatchSinceAcceptsRecentDeploys(t *testing.T) {
+	recentTime := time.Now().Add(-5 * time.Second)
+
+	mock := &mockProvider{
+		name: "test",
+		deployments: []*Deployment{
+			{ID: "recent-1", Status: StatusSucceeded, Provider: "test", CreatedAt: recentTime},
+		},
+	}
+
+	result, err := Watch(context.Background(), mock, WatchConfig{
+		Interval: 1 * time.Millisecond,
+		Timeout:  5 * time.Second,
+		Since:    time.Now().Add(-1 * time.Minute),
+		Writer:   &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Watch() error: %v", err)
+	}
+
+	if result.Deployment.ID != "recent-1" {
+		t.Errorf("deployment ID = %s, want recent-1", result.Deployment.ID)
+	}
+}
+
+func TestWatchSpinnerOutput(t *testing.T) {
+	// Provider returns same status twice to trigger spinner, then terminal
+	mock := &mockProvider{
+		name: "test",
+		deployments: []*Deployment{
+			{ID: "d1", Status: StatusBuilding, Provider: "test"},
+			{ID: "d1", Status: StatusBuilding, Provider: "test"}, // same status = spinner
+			{ID: "d1", Status: StatusSucceeded, Provider: "test"},
+		},
+	}
+
+	var buf bytes.Buffer
+	_, err := Watch(context.Background(), mock, WatchConfig{
+		Interval: 1 * time.Millisecond,
+		Timeout:  5 * time.Second,
+		Writer:   &buf,
+	})
+	if err != nil {
+		t.Fatalf("Watch() error: %v", err)
+	}
+
+	output := buf.String()
+	// Should contain spinner character (braille pattern)
+	if !strings.Contains(output, "⠋") && !strings.Contains(output, "⠙") {
+		t.Error("output should contain spinner character")
+	}
+}
+
+func TestLogStreamerInterface(t *testing.T) {
+	// Verify Railway implements LogStreamer
+	r, _ := NewRailway(ProviderConfig{Token: "tok", Project: "proj"})
+	var _ LogStreamer = r // compile-time check
+}
+
 func TestStatusSymbol(t *testing.T) {
 	tests := []struct {
 		status string

@@ -206,6 +206,62 @@ func (r *Railway) nodeToDeployment(node *railwayDeploymentNode) *Deployment {
 	return d
 }
 
+// StreamLogs polls Railway's deploymentLogs and writes new log lines to w.
+func (r *Railway) StreamLogs(ctx context.Context, deploymentID string, w io.Writer) error {
+	query := `query($id: String!, $limit: Int, $filter: String) {
+		deploymentLogs(deploymentId: $id, limit: $limit, filter: $filter) {
+			message
+			timestamp
+			severity
+		}
+	}`
+
+	seen := 0
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		var result struct {
+			DeploymentLogs []struct {
+				Message   string `json:"message"`
+				Timestamp string `json:"timestamp"`
+				Severity  string `json:"severity"`
+			} `json:"deploymentLogs"`
+		}
+
+		err := r.doGraphQL(ctx, railwayGQLRequest{
+			Query: query,
+			Variables: map[string]any{
+				"id":    deploymentID,
+				"limit": 500,
+			},
+		}, &result)
+		if err != nil {
+			// Don't fail the whole watch on log errors; just stop streaming
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Transient error, try again next tick
+			goto wait
+		}
+
+		// Print only new log lines
+		if len(result.DeploymentLogs) > seen {
+			for _, line := range result.DeploymentLogs[seen:] {
+				fmt.Fprintf(w, "  %s\n", line.Message)
+			}
+			seen = len(result.DeploymentLogs)
+		}
+
+	wait:
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func railwayStatus(s string) Status {
 	switch s {
 	case "INITIALIZING", "QUEUED", "WAITING":

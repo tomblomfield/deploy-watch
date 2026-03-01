@@ -5,14 +5,14 @@ A CLI tool that monitors deployment status across cloud providers and exits when
 ## Install
 
 ```bash
-go install github.com/tomblomfield/gocli/cmd/deploy-watch@latest
+go install github.com/tomblomfield/deploy-watch/cmd/deploy-watch@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/tomblomfield/gocli.git
-cd gocli
+git clone https://github.com/tomblomfield/deploy-watch.git
+cd deploy-watch
 go build -o deploy-watch ./cmd/deploy-watch/
 ```
 
@@ -34,7 +34,10 @@ deploy-watch [flags] <provider> [deployment-id]
 ### Watch the latest deployment
 
 ```bash
-# Railway
+# Railway (auto-discovers config from Railway CLI if linked)
+deploy-watch railway
+
+# Railway (explicit)
 export RAILWAY_TOKEN=your-token
 deploy-watch -project your-project-id railway
 
@@ -49,6 +52,15 @@ deploy-watch -project myapp heroku
 # Fly.io
 export FLY_API_TOKEN=your-token
 deploy-watch -project myapp fly
+```
+
+### Railway CLI auto-discovery
+
+If you have the [Railway CLI](https://docs.railway.app/guides/cli) installed and have linked a project with `railway link`, deploy-watch will automatically read your token, project, service, and environment from `~/.railway/config.json`. No flags or environment variables needed:
+
+```bash
+cd my-railway-project
+deploy-watch railway
 ```
 
 ### Watch a specific deployment
@@ -105,6 +117,20 @@ deploy-watch \
 deploy-watch -team team_xyz vercel
 ```
 
+### Only watch recent deployments
+
+```bash
+# Skip any deploy older than 60 seconds (useful in agent workflows)
+deploy-watch -since 60s railway
+```
+
+### Stream build/deploy logs
+
+```bash
+# Show build and deploy logs inline (Railway only)
+deploy-watch -logs railway
+```
+
 ### Custom poll interval and timeout
 
 ```bash
@@ -120,6 +146,8 @@ deploy-watch -interval 3s -timeout 10m railway
 | `-service` | | Service ID (Railway only) |
 | `-environment` | | Environment ID (Railway only) |
 | `-team` | | Team ID (Vercel only) |
+| `-since` | | Only watch deploys created within this duration (e.g. `30s`, `5m`) |
+| `-logs` | `false` | Stream build/deploy logs inline (Railway only) |
 | `-interval` | `5s` | Poll interval |
 | `-timeout` | `30m` | Max wait time |
 | `-json` | `false` | Output as JSON |
@@ -166,10 +194,11 @@ The watcher polls until any terminal status is reached (`SUCCEEDED`, `FAILED`, `
 
 ```bash
 # 1. Trigger a deployment (provider-specific)
-railway up
+railway up --detach
 
-# 2. Wait for it to complete
-deploy-watch -timeout 10m railway
+# 2. Wait for it to complete (auto-discovers Railway CLI config)
+#    -since 60s ensures we watch the deploy we just triggered, not an older one
+deploy-watch -since 60s -timeout 10m railway
 
 # 3. Continue based on exit code
 if [ $? -eq 0 ]; then
@@ -184,8 +213,9 @@ fi
 cmd/deploy-watch/main.go       CLI entry point, flag parsing, signal handling
 internal/deploy/
   provider.go                  Provider interface, Status type, Deployment struct
-  watcher.go                   Core polling loop with timeout and cancellation
-  railway.go                   Railway GraphQL API client
+  watcher.go                   Core polling loop with timeout, spinner, and log streaming
+  railway.go                   Railway GraphQL API client + log streaming
+  railwayconfig.go             Railway CLI config auto-discovery (~/.railway/config.json)
   vercel.go                    Vercel REST API client
   heroku.go                    Heroku REST API client
   fly.go                       Fly.io Machines API client
