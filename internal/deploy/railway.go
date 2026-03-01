@@ -46,15 +46,12 @@ type railwayGQLRequest struct {
 }
 
 type railwayDeploymentNode struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	URL    string `json:"staticUrl"`
-	Meta   *struct {
-		CommitHash    string `json:"commitHash"`
-		CommitMessage string `json:"commitMessage"`
-	} `json:"meta"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID        string          `json:"id"`
+	Status    string          `json:"status"`
+	URL       string          `json:"staticUrl"`
+	Meta      json.RawMessage `json:"meta"`
+	CreatedAt string          `json:"createdAt"`
+	UpdatedAt string          `json:"updatedAt"`
 	Service   *struct {
 		Name string `json:"name"`
 	} `json:"service"`
@@ -111,7 +108,7 @@ func (r *Railway) GetDeployment(ctx context.Context, id string) (*Deployment, er
 	query := `query($id: String!) {
 		deployment(id: $id) {
 			id status staticUrl createdAt updatedAt
-			meta { commitHash commitMessage }
+			meta
 			service { name }
 			environment { name }
 		}
@@ -136,7 +133,7 @@ func (r *Railway) LatestDeployment(ctx context.Context) (*Deployment, error) {
 		deployments(input: $input) {
 			edges { node {
 				id status staticUrl createdAt updatedAt
-				meta { commitHash commitMessage }
+				meta
 				service { name }
 				environment { name }
 			}}
@@ -184,9 +181,15 @@ func (r *Railway) nodeToDeployment(node *railwayDeploymentNode) *Deployment {
 		URL:       node.URL,
 		RawStatus: node.Status,
 	}
-	if node.Meta != nil {
-		d.CommitSHA = node.Meta.CommitHash
-		d.CommitMsg = node.Meta.CommitMessage
+	if len(node.Meta) > 0 {
+		var meta struct {
+			CommitHash    string `json:"commitHash"`
+			CommitMessage string `json:"commitMessage"`
+		}
+		if json.Unmarshal(node.Meta, &meta) == nil {
+			d.CommitSHA = meta.CommitHash
+			d.CommitMsg = meta.CommitMessage
+		}
 	}
 	if node.Service != nil {
 		d.Project = node.Service.Name
