@@ -4,6 +4,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -91,6 +92,12 @@ type ProviderConfig struct {
 	Service     string // Railway-specific
 	Environment string // Railway-specific
 	Team        string // Vercel-specific
+}
+
+// LogStreamer is an optional interface that providers can implement to stream
+// build and deploy logs for a deployment.
+type LogStreamer interface {
+	StreamLogs(ctx context.Context, deploymentID string, w io.Writer) error
 }
 
 // ErrNoDeployments is returned when no deployments are found.

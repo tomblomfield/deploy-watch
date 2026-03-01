@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomblomfield/gocli/internal/deploy"
+	"github.com/tomblomfield/deploy-watch/internal/deploy"
 )
 
 var version = "0.1.0"
@@ -43,6 +43,8 @@ func run() int {
 	team := flag.String("team", "", "Team ID (Vercel)")
 	interval := flag.Duration("interval", 5*time.Second, "Poll interval")
 	timeout := flag.Duration("timeout", 30*time.Minute, "Max wait time")
+	since := flag.Duration("since", 0, "Only watch deploys created within this duration (e.g. 30s, 5m)")
+	showLogs := flag.Bool("logs", false, "Stream build/deploy logs (Railway only)")
 	jsonOutput := flag.Bool("json", false, "Output as JSON")
 	showVer := flag.Bool("version", false, "Print version")
 
@@ -120,6 +122,25 @@ Flags:
 		cfg.Project = projectFromEnv(providerName)
 	}
 
+	// For Railway, fall back to CLI config (~/.railway/config.json)
+	if providerName == "railway" {
+		wd, _ := os.Getwd()
+		if railCfg, err := deploy.ReadRailwayCLIConfig(wd); err == nil {
+			if cfg.Token == "" {
+				cfg.Token = railCfg.Token
+			}
+			if cfg.Project == "" {
+				cfg.Project = railCfg.Project
+			}
+			if cfg.Service == "" {
+				cfg.Service = railCfg.Service
+			}
+			if cfg.Environment == "" {
+				cfg.Environment = railCfg.Environment
+			}
+		}
+	}
+
 	provider, err := newProvider(providerName, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
@@ -130,11 +151,18 @@ Flags:
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	var sinceTime time.Time
+	if *since > 0 {
+		sinceTime = time.Now().Add(-*since)
+	}
+
 	watchCfg := deploy.WatchConfig{
 		Interval:     *interval,
 		Timeout:      *timeout,
 		DeploymentID: deploymentID,
+		Since:        sinceTime,
 		JSONOutput:   *jsonOutput,
+		StreamLogs:   *showLogs,
 		Writer:       os.Stderr,
 	}
 
